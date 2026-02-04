@@ -1,0 +1,261 @@
+# Supabase Integration Implementation Plan
+
+This plan outlines the steps to connect your conciergerie frontend application to the Supabase database, replacing the mock data with real backend functionality.
+
+## Overview
+
+Your frontend is well-structured with:
+- ✅ Complete UI components for all entities
+- ✅ React Router navigation setup
+- ✅ Centralized state management via [useAppState](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx#202-209)
+- ✅ Complete database schema with RLS policies
+- ✅ Supabase environment variables configured
+
+**Goal**: Replace the mock data layer with Supabase services while maintaining the same component interfaces.
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Database Improvements**: I have updated the plan to include industry standards and Supabase best practices:
+> 1. **Auth Triggers**: Automatically create a profile when a user signs up.
+> 2. **Recursive RLS Fix**: Using a secure function `is_admin()` to avoid recursion and improve performance.
+> 3. **Profiles naming**: Standardizing on the `profiles` table name throughout the schema.
+> 4. **Encapsulated Security**: Using specific functions for role-based access control.
+
+> [!IMPORTANT]
+> **Database Schema Application**: Please confirm if you want me to apply these improvements directly to your [database-schema.sql](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/docs/database-schema.sql) file.
+
+## Proposed Changes
+
+### Phase 1: Database & Dependencies
+
+#### [MODIFY] [database-schema.sql](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/docs/database-schema.sql)
+- Rename all `users` references to `profiles`
+- Implement `handle_new_user()` trigger for Supabase Auth
+- Implement `is_admin()` and `get_my_profile_id()` helper functions
+- Fix RLS policies to use helper functions (solving recursion)
+- Uncomment and verify all views
+- Ensure consistent `updated_at` triggers
+
+#### [NEW] [package.json](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/package.json)
+- Add `@supabase/supabase-js` dependency for database client
+
+---
+
+### Phase 2: Supabase Client Setup
+
+#### [NEW] [supabaseClient.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/lib/supabaseClient.ts)
+- Initialize Supabase client with environment variables
+- Export typed client instance
+
+#### [NEW] [database.types.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/lib/database.types.ts)
+- TypeScript types generated from Supabase schema
+- Ensures type safety across all database operations
+
+---
+
+### Phase 3: Authentication Layer
+
+#### [NEW] [AuthContext.tsx](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/contexts/AuthContext.tsx)
+- React context for authentication state
+- Functions: `signIn()`, `signOut()`, `getCurrentUser()`
+- Automatically syncs with Supabase auth state
+- Links `auth.users` to `users` table via `auth_id`
+
+#### [NEW] [Login.tsx](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/pages/Login.tsx)
+- Login form with email/password fields
+- Error handling and loading states
+- Redirects to dashboard on successful login
+
+#### [NEW] [ProtectedRoute.tsx](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/components/auth/ProtectedRoute.tsx)
+- Route wrapper requiring authentication
+- Redirects to login if not authenticated
+- Optional role-based access control
+
+#### [MODIFY] [App.tsx](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/App.tsx)
+- Wrap app with `AuthProvider`
+- Add login route
+- Wrap existing routes with `ProtectedRoute`
+
+---
+
+### Phase 4: Supabase Service Layer
+
+Create service modules that encapsulate all database operations. Each service provides CRUD functions and maintains the same contract expected by the UI components.
+
+#### [NEW] [apartments.service.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/services/apartments.service.ts)
+**Functions:**
+- `getApartments()` - Fetch all apartments with bag info (joins bags table)
+- `getApartment(id)` - Fetch single apartment
+- `createApartment(data, bagItems)` - Create apartment (bag auto-created by trigger)
+- [updateApartment(id, data)](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx#74-79) - Update apartment details
+- [deleteApartment(id)](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx#79-87) - Delete apartment (cascades to bag and missions)
+- `updateICalLink(id, link)` - Update iCal sync URL
+
+#### [NEW] [bags.service.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/services/bags.service.ts)
+**Functions:**
+- `getBags()` - Fetch all bags with apartment and item details
+- `getBag(id)` - Fetch single bag with items
+- [updateBagStatus(id, status)](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx#110-122) - Update bag status
+- [updateBagItems(id, items)](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx#122-142) - Update bag contents (replaces all items)
+- `checkBagStockAvailability(id)` - Check if stock is sufficient
+
+#### [NEW] [missions.service.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/services/missions.service.ts)
+**Functions:**
+- `getMissions(filters?)` - Fetch missions with optional date/status/agent filters
+- `getMission(id)` - Fetch single mission with full details
+- `createMission(data)` - Create new mission
+- [updateMissionStatus(id, status)](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx#87-110) - Update mission status (triggers bag status sync)
+- [assignAgent(id, agentId)](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx#165-177) - Assign agent to mission
+- `deleteMission(id)` - Delete mission
+
+#### [NEW] [stock.service.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/services/stock.service.ts)
+**Functions:**
+- `getStockItems()` - Fetch all stock items
+- `getStockItem(id)` - Fetch single stock item
+- `createStockItem(data)` - Create new stock item
+- [updateStockQuantity(id, quantity)](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx#142-154) - Update stock quantity (triggers bag status updates)
+- `deleteStockItem(id)` - Delete stock item
+
+#### [NEW] [reservations.service.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/services/reservations.service.ts)
+**Functions:**
+- `getReservations(apartmentId?)` - Fetch reservations
+- `syncICalFeed(apartmentId)` - Fetch and parse iCal, create/update reservations
+- `createReservation(data)` - Manually create reservation
+- `deleteReservation(id)` - Delete reservation
+
+#### [NEW] [users.service.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/services/users.service.ts)
+**Functions:**
+- `getUsers()` - Fetch all users
+- `getUser(id)` - Fetch single user
+- `getCurrentUserProfile()` - Get current user's profile from users table
+- `createUserProfile(authId, data)` - Create user profile linked to auth
+
+---
+
+### Phase 5: State Management Refactor
+
+#### [MODIFY] [useAppState.tsx](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/hooks/useAppState.tsx)
+**Changes:**
+- Replace `useState` with `useEffect` to fetch data on mount
+- Replace mock data imports with service function calls
+- Implement loading and error states
+- Keep optimistic updates for better UX
+- Add real-time subscriptions (optional)
+
+**Strategy:**
+- Maintain the same context API so components don't need changes
+- Load all data on mount (apartments, bags, missions, stock)
+- User mutations call Supabase services and update local state
+- Consider implementing real-time subscriptions for collaborative features
+
+---
+
+### Phase 6: Type Alignment
+
+#### [MODIFY] [index.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/types/index.ts)
+**Changes:**
+- Align frontend types with database schema naming
+- Add `Reservation` type
+- Map database column names to camelCase for frontend (e.g., `alert_threshold` → `alertThreshold`)
+
+---
+
+### Phase 7: Utilities
+
+#### [NEW] [ical-parser.ts](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/lib/ical-parser.ts)
+- Parse iCal feed URLs
+- Extract events with check-in/check-out dates
+- Transform to reservation format
+
+## Verification Plan
+
+### Automated Tests
+
+**Database Connection Test**
+```bash
+# Create a simple test file to verify Supabase connection
+npm run dev
+# Check browser console for any connection errors
+```
+
+### Manual Verification
+
+**1. Database Setup Verification**
+- [ ] Navigate to Supabase dashboard → SQL Editor
+- [ ] Run the schema from [database-schema.sql](file:///c:/Users/dry-_/OneDrive/Bureau/Apios/conciergerie/src/docs/database-schema.sql)
+- [ ] Verify all tables appear in Table Editor
+- [ ] Check that sample data is inserted (or run the commented section)
+
+**2. Authentication Flow**
+- [ ] Start dev server: `npm run dev`
+- [ ] Navigate to login page
+- [ ] Create a new user account via Supabase dashboard Auth section
+- [ ] Login with those credentials
+- [ ] Verify redirection to dashboard
+- [ ] Verify user profile is created in `users` table
+
+**3. CRUD Operations Testing**
+
+*Apartments:*
+- [ ] View all apartments on Apartments page
+- [ ] Create a new apartment
+- [ ] Edit an existing apartment
+- [ ] Delete an apartment
+- [ ] Verify bag is auto-created for new apartments
+
+*Stock Management:*
+- [ ] View stock items
+- [ ] Add new stock item
+- [ ] Update stock quantity
+- [ ] Verify stock alerts appear when quantity < threshold
+
+*Missions:*
+- [ ] View missions list
+- [ ] Create manual mission
+- [ ] Assign agent to mission
+- [ ] Update mission status to "en_cours"
+- [ ] Verify bag status changes to "prêt"
+- [ ] Complete mission
+- [ ] Verify bag status changes to "sale"
+
+*Bags:*
+- [ ] View bags page
+- [ ] Update bag items
+- [ ] Change bag status manually
+- [ ] Verify stock availability indicator
+
+**4. Row Level Security**
+- [ ] Login as admin user
+- [ ] Verify full access to all CRUD operations
+- [ ] Create an agent user in users table
+- [ ] Logout and login as agent
+- [ ] Verify read-only access to apartments, stock, bags
+- [ ] Verify agent can update their own missions
+
+**5. Data Persistence**
+- [ ] Create test data (apartment, mission, stock item)
+- [ ] Refresh the page
+- [ ] Verify data persists across refreshes
+- [ ] Close and reopen browser
+- [ ] Verify session persists (or requires re-login as configured)
+
+## Implementation Notes
+
+**Key Patterns:**
+1. **Service Layer Pattern**: All database operations go through service modules, keeping components clean
+2. **Error Handling**: Services should throw errors; components display them
+3. **Loading States**: UI shows loading indicators during async operations
+4. **Optimistic Updates**: Update UI immediately, rollback on error
+5. **Type Safety**: Use generated database types throughout
+
+**RLS Considerations:**
+- Admin users have full access to all tables
+- Agent users have read-only access except for their own missions
+- Authentication is required for all operations
+- Use `supabase.auth.getUser()` to verify authentication
+
+**Performance:**
+- Consider pagination for large datasets (missions, reservations)
+- Use Supabase's built-in caching
+- Implement real-time subscriptions sparingly (only for critical data)
