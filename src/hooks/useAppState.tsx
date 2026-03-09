@@ -3,7 +3,7 @@ import { Apartment, Bag, BagItem, Mission, StockItem, User, Reservation } from '
 import { getApartments, createApartment, updateApartment as updateApartmentService, deleteApartment as deleteApartmentService } from '../services/apartments.service';
 import { getBags, updateBagStatus as updateBagStatusService, updateBagItems as updateBagItemsService } from '../services/bags.service';
 import { getMissions, createMission as createMissionService, updateMissionStatus as updateMissionStatusService, assignAgent as assignAgentService } from '../services/missions.service';
-import { getStockItems, updateStockQuantity as updateStockQuantityService } from '../services/stock.service';
+import { getStockItems, createStockItem as createStockItemService, updateStockItem as updateStockItemService, deleteStockItem as deleteStockItemService, updateStockQuantity as updateStockQuantityService } from '../services/stock.service';
 import { getProfiles } from '../services/profiles.service';
 import { getReservations, bulkUpsertReservations } from '../services/reservations.service';
 import { parseICal, transformToReservations } from '../lib/ical-parser';
@@ -43,6 +43,9 @@ interface AppContextType {
   updateBagStatus: (bagId: string, status: Bag['status']) => Promise<void>;
   updateBagItems: (bagId: string, items: BagItem[]) => Promise<void>;
   updateStockQuantity: (itemId: string, quantity: number) => Promise<void>;
+  addStockItem: (item: Partial<StockItem>) => Promise<void>;
+  updateStockItem: (item: Partial<StockItem>) => Promise<void>;
+  deleteStockItem: (itemId: string) => Promise<void>;
   addMission: (mission: Mission) => Promise<void>;
   assignAgent: (missionId: string, agentId: string) => Promise<void>;
   syncApartmentReservations: (apartmentId: string) => Promise<void>;
@@ -507,6 +510,61 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const addStockItem = async (item: Partial<StockItem>) => {
+    try {
+      // We can't easily optimistic update since we don't have the ID yet
+      const dbItem = await createStockItemService({
+        name: item.name!,
+        category: item.category!,
+        quantity: item.quantity,
+        alert_threshold: item.alertThreshold,
+        unit: item.unit,
+      });
+      const newItem = convertStockItemToFrontend(dbItem);
+      setStock(prev => [...prev, newItem]);
+    } catch (err) {
+      console.error('Error adding stock item:', err);
+      setError(err instanceof Error ? err.message : 'Failed to add stock item');
+      throw err;
+    }
+  };
+
+  const updateStockItem = async (item: Partial<StockItem>) => {
+    if (!item.id) return;
+    const previousStock = [...stock];
+
+    setStock(prev => prev.map(s => s.id === item.id ? { ...s, ...item } as StockItem : s));
+
+    try {
+      await updateStockItemService(item.id, {
+        name: item.name,
+        category: item.category,
+        quantity: item.quantity,
+        alert_threshold: item.alertThreshold,
+        unit: item.unit
+      });
+    } catch (err) {
+      console.error('Error updating stock item:', err);
+      setError(err instanceof Error ? err.message : 'Failed to update stock item');
+      setStock(previousStock);
+      throw err;
+    }
+  };
+
+  const deleteStockItem = async (itemId: string) => {
+    const previousStock = [...stock];
+    setStock(prev => prev.filter(s => s.id !== itemId));
+
+    try {
+      await deleteStockItemService(itemId);
+    } catch (err) {
+      console.error('Error deleting stock item:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete stock item');
+      setStock(previousStock);
+      throw err;
+    }
+  };
+
   const addMission = async (mission: Mission) => {
     // Optimistic update
     setMissions([...missions, mission]);
@@ -650,7 +708,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updateMissionStatus,
         updateBagStatus,
         updateBagItems,
+
         updateStockQuantity,
+        addStockItem,
+        updateStockItem,
+        deleteStockItem,
         addMission,
         assignAgent,
         syncApartmentReservations,
