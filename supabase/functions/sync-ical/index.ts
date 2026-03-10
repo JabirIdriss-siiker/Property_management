@@ -103,7 +103,7 @@ serve(async (req) => {
         id, 
         name, 
         ical_link,
-        bags (id)
+        bags (id, created_at)
       `)
             .eq('is_active', true)
             .eq('ical_sync_enabled', true)
@@ -116,10 +116,12 @@ serve(async (req) => {
         for (const apartment of apartments) {
             try {
                 console.log(`Syncing apartment: ${apartment.name}`)
-                const bagId = apartment.bags?.[0]?.id
+                // Use the oldest bag as the template
+                const sortedBags = apartment.bags ? [...apartment.bags].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) : []
+                const templateBagId = sortedBags[0]?.id
 
-                if (!bagId) {
-                    console.warn(`No bag found for ${apartment.name}. Skipping mission creation.`)
+                if (!templateBagId) {
+                    console.warn(`No template bag found for ${apartment.name}. Will create empty bags for missions.`)
                 }
 
                 // 2. Fetch iCal feed
@@ -148,7 +150,7 @@ serve(async (req) => {
                 let missionsCreated = 0
                 const today = new Date().toISOString().split('T')[0]
 
-                if (bagId && reservations.length > 0) {
+                if (reservations.length > 0) {
                     for (const res of reservations) {
                         // Only create missions for future or today's checkouts
                         if (res.check_out < today) continue
@@ -162,11 +164,44 @@ serve(async (req) => {
                             .limit(1)
 
                         if (!existingMissions || existingMissions.length === 0) {
+                            // 1. Create a dedicated bag for this mission
+                            const { data: newBag, error: bagError } = await supabaseClient
+                                .from('bags')
+                                .insert({
+                                    apartment_id: apartment.id,
+                                    status: 'à_préparer'
+                                })
+                                .select('id')
+                                .single()
+
+                            if (bagError || !newBag) {
+                                console.error(`Error creating bag for mission ${res.id}`, bagError)
+                                continue;
+                            }
+
+                            // 2. Copy template bag items if a template bag exists
+                            if (templateBagId) {
+                                const { data: templateItems } = await supabaseClient
+                                    .from('bag_items')
+                                    .select('stock_item_id, quantity')
+                                    .eq('bag_id', templateBagId)
+
+                                if (templateItems && templateItems.length > 0) {
+                                    const newItems = templateItems.map((item: any) => ({
+                                        bag_id: newBag.id,
+                                        stock_item_id: item.stock_item_id,
+                                        quantity: item.quantity
+                                    }))
+                                    await supabaseClient.from('bag_items').insert(newItems)
+                                }
+                            }
+
+                            // 3. Create the mission linked to the new dedicated bag
                             const { error: missionError } = await supabaseClient
                                 .from('missions')
                                 .insert({
                                     apartment_id: apartment.id,
-                                    bag_id: bagId,
+                                    bag_id: newBag.id,
                                     reservation_id: res.id,
                                     scheduled_date: res.check_out,
                                     scheduled_time: '11:00',
@@ -175,7 +210,11 @@ serve(async (req) => {
                                     notes: `Auto-généré depuis iCal: ${res.summary}`
                                 })
 
-                            if (!missionError) missionsCreated++
+                            if (!missionError) {
+                                missionsCreated++
+                            } else {
+                                console.error(`Error creating mission for ${res.id}:`, missionError)
+                            }
                         }
                     }
                 }
@@ -190,7 +229,7 @@ serve(async (req) => {
                     apartment: apartment.name,
                     reservations_count: reservations.length,
                     missions_created: missionsCreated,
-                    bag_status: bagId ? 'ok' : 'missing'
+                    bag_status: templateBagId ? 'ok' : 'missing_template'
                 })
 
             } catch (err) {

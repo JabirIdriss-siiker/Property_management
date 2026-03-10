@@ -1,7 +1,7 @@
 import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 import { Apartment, Bag, BagItem, Mission, StockItem, User, Reservation } from '../types';
 import { getApartments, createApartment, updateApartment as updateApartmentService, deleteApartment as deleteApartmentService } from '../services/apartments.service';
-import { getBags, updateBagStatus as updateBagStatusService, updateBagItems as updateBagItemsService } from '../services/bags.service';
+import { getBags, updateBagStatus as updateBagStatusService, updateBagItems as updateBagItemsService, createBag as createBagService, prepareBag as prepareBagService } from '../services/bags.service';
 import { getMissions, createMission as createMissionService, updateMissionStatus as updateMissionStatusService, assignAgent as assignAgentService } from '../services/missions.service';
 import { getStockItems, createStockItem as createStockItemService, updateStockItem as updateStockItemService, deleteStockItem as deleteStockItemService, updateStockQuantity as updateStockQuantityService } from '../services/stock.service';
 import { getProfiles } from '../services/profiles.service';
@@ -42,6 +42,7 @@ interface AppContextType {
   updateMissionStatus: (missionId: string, status: Mission['status']) => Promise<void>;
   updateBagStatus: (bagId: string, status: Bag['status']) => Promise<void>;
   updateBagItems: (bagId: string, items: BagItem[]) => Promise<void>;
+  prepareBag: (bagId: string, items: BagItem[]) => Promise<void>;
   updateStockQuantity: (itemId: string, quantity: number) => Promise<void>;
   addStockItem: (item: Partial<StockItem>) => Promise<void>;
   updateStockItem: (item: Partial<StockItem>) => Promise<void>;
@@ -485,6 +486,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const prepareBag = async (bagId: string, usedItems: BagItem[]) => {
+    const previousBags = [...bags];
+    const previousStock = [...stock];
+
+    // Optimistic: update bag status and decrease stock quantities
+    setBags(bags.map(b => b.id === bagId ? { ...b, status: 'prêt', items: usedItems } : b));
+    
+    setStock(stock.map(s => {
+      const used = usedItems.find(u => u.stockItemId === s.id);
+      if (used) {
+        return { ...s, quantity: Math.max(0, s.quantity - used.quantity) };
+      }
+      return s;
+    }));
+
+    try {
+      await prepareBagService(
+        bagId,
+        usedItems.map(item => ({
+          stock_item_id: item.stockItemId,
+          quantity: item.quantity
+        }))
+      );
+    } catch (err) {
+      console.error('Error preparing bag:', err);
+      setError(err instanceof Error ? err.message : 'Failed to prepare bag and deduct stock');
+      setBags(previousBags);
+      setStock(previousStock);
+      throw err;
+    }
+  };
+
   const updateStockQuantity = async (itemId: string, quantity: number) => {
     const previousStock = [...stock];
     // Optimistic update
@@ -566,43 +599,66 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const addMission = async (mission: Mission) => {
+    // 1. Find a template bag for this apartment to copy its items
+    const templateBag = bags.find((b) => b.apartmentId === mission.apartmentId);
+    const newBagId = crypto.randomUUID();
+    const newBagItems = templateBag ? templateBag.items.map(i => ({
+      ...i,
+      id: crypto.randomUUID()
+    })) : [];
+
+    const isComplete = checkStockForBag(newBagItems);
+    
+    const newBag: Bag = {
+      id: newBagId,
+      apartmentId: mission.apartmentId,
+      status: isComplete ? 'à_préparer' : 'à_préparer_incomplet',
+      items: newBagItems,
+    };
+
+    // Update mission to point to the newly created bag instead of the template one
+    const missionToCreate = { ...mission, bagId: newBagId };
+
     // Optimistic update
-    setMissions([...missions, mission]);
-    const bag = bags.find((b) => b.id === mission.bagId);
-    if (bag) {
-      const isComplete = checkStockForBag(bag.items);
-      setBags(
-        bags.map((b) =>
-          b.id === bag.id
-            ? {
-              ...b,
-              status: isComplete ? 'à_préparer' : 'à_préparer_incomplet',
-            }
-            : b
-        )
-      );
-    }
+    setBags([...bags, newBag]);
+    setMissions([...missions, missionToCreate]);
 
     try {
+      // Create bag in DB first
+      const dbBag = await createBagService({
+        apartment_id: missionToCreate.apartmentId,
+        status: newBag.status,
+      }, newBagItems.map(i => ({
+        stock_item_id: i.stockItemId,
+        quantity: i.quantity
+      })));
+
+      // Ensure we use the DB-generated bag ID if it differs (though UI provided UUID works if passed, but createBagService didn't take an ID parameter currently. Wait, we omitted 'id' in createBagService, so DB generates it).
+      const finalBagId = dbBag.id;
+
       const dbMission = await createMissionService({
-        apartment_id: mission.apartmentId,
-        scheduled_date: mission.date,
-        scheduled_time: mission.time,
-        agent_id: mission.agentId,
-        status: mission.status,
-        bag_id: mission.bagId,
-        notes: mission.notes,
-        is_manual: mission.isManual,
+        apartment_id: missionToCreate.apartmentId,
+        scheduled_date: missionToCreate.date,
+        scheduled_time: missionToCreate.time,
+        agent_id: missionToCreate.agentId,
+        status: missionToCreate.status,
+        bag_id: finalBagId, // Use the real DB bag ID
+        notes: missionToCreate.notes,
+        is_manual: missionToCreate.isManual,
       });
 
       // Update with actual data from server
       const createdMission = convertMissionToFrontend(dbMission);
-      setMissions((prev) => prev.map((m) => (m.id === mission.id ? createdMission : m)));
+      const createdBag = convertBagToFrontend(dbBag);
+
+      setBags((prev) => prev.map((b) => (b.id === newBagId ? createdBag : b)));
+      setMissions((prev) => prev.map((m) => (m.id === missionToCreate.id ? createdMission : m)));
     } catch (err) {
       console.error('Error creating mission:', err);
       setError(err instanceof Error ? err.message : 'Failed to create mission');
       // Revert optimistic update
-      setMissions((prev) => prev.filter((m) => m.id !== mission.id));
+      setMissions((prev) => prev.filter((m) => m.id !== missionToCreate.id));
+      setBags((prev) => prev.filter((b) => b.id !== newBagId));
       throw err;
     }
   };
@@ -708,6 +764,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updateMissionStatus,
         updateBagStatus,
         updateBagItems,
+        prepareBag,
 
         updateStockQuantity,
         addStockItem,

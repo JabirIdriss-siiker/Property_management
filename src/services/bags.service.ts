@@ -27,6 +27,8 @@ export interface BagWithDetails extends Bag {
     stock_available?: boolean;
 }
 
+export type BagInsert = Database['public']['Tables']['bags']['Insert'];
+
 /**
  * Fetch all bags with apartment and item details
  */
@@ -245,4 +247,73 @@ export async function getBagsToPrep(): Promise<BagWithDetails[]> {
             stock_available: stockAvailable
         };
     }));
+}
+
+/**
+ * Create a new bag and optionally its items
+ */
+export async function createBag(
+    bagData: Omit<BagInsert, 'id' | 'created_at' | 'updated_at'>,
+    bagItemsData?: Array<{ stock_item_id: string; quantity: number }>
+): Promise<Bag> {
+    const { data: bag, error: bagError } = await supabase
+        .from('bags')
+        .insert(bagData)
+        .select()
+        .single();
+
+    if (bagError) throw bagError;
+
+    if (bagItemsData && bagItemsData.length > 0) {
+        const itemsToInsert: BagItemInsert[] = bagItemsData.map(item => ({
+            bag_id: bag.id,
+            stock_item_id: item.stock_item_id,
+            quantity: item.quantity
+        }));
+
+        const { error: itemsError } = await supabase
+            .from('bag_items')
+            .insert(itemsToInsert);
+
+        if (itemsError) throw itemsError;
+    }
+
+    return bag;
+}
+
+/**
+ * Prepare a bag (Checklist fulfilled)
+ * Deducts stock and updates bag status
+ */
+export async function prepareBag(
+    bagId: string,
+    usedItems: Array<{ stock_item_id: string; quantity: number }>
+): Promise<void> {
+    // 1. Update the bag items first
+    await updateBagItems(bagId, usedItems);
+
+    // 2. Decrement stock for each item
+    for (const item of usedItems) {
+        // Fetch current stock
+        const { data: stockItem, error: stockFetchError } = await supabase
+            .from('stock_items')
+            .select('quantity')
+            .eq('id', item.stock_item_id)
+            .single();
+
+        if (stockFetchError) throw stockFetchError;
+
+        const newQuantity = Math.max(0, stockItem.quantity - item.quantity);
+
+        // Update stock
+        const { error: stockUpdateError } = await supabase
+            .from('stock_items')
+            .update({ quantity: newQuantity })
+            .eq('id', item.stock_item_id);
+
+        if (stockUpdateError) throw stockUpdateError;
+    }
+
+    // 3. Mark bag as prêt
+    await updateBagStatus(bagId, 'prêt');
 }

@@ -10,7 +10,15 @@ interface MissionDateGroupProps {
 }
 
 export function MissionDateGroup({ date, count, children }: MissionDateGroupProps) {
-  const label = format(new Date(date), 'EEEE d MMMM yyyy', { locale: fr }).replace(/^\w/, c => c.toUpperCase());
+  let label = date;
+  try {
+    const parsedDate = new Date(date);
+    if (!isNaN(parsedDate.getTime())) {
+      label = format(parsedDate, 'EEEE d MMMM yyyy', { locale: fr }).replace(/^\w/, c => c.toUpperCase());
+    }
+  } catch (err) {
+    // Ignore formatting error, fallback to raw string
+  }
 
   return (
     <section className="space-y-3">

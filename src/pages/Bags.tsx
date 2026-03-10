@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useAppState } from '../hooks/useAppState';
 import {
   Card,
@@ -11,19 +11,22 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { BagStatus } from '../components/bags/BagStatus';
-import { Bag, BagItem } from '../types';
+import { BagChecklistForm } from '../components/bags/BagChecklistForm';
+import { MissionDateGroup } from '../components/missions/MissionDateGroup';
+import { Bag, BagItem, Mission } from '../types';
 import {
   ShoppingBag,
   Building2,
   Edit,
-  Package,
   Plus,
   Minus,
-  Save,
-  RotateCcw } from
+  Save } from
 'lucide-react';
+import { parseISO, format } from 'date-fns';
+import { fr } from 'date-fns/locale';
+
 export function Bags() {
-  const { bags, apartments, stock, updateBagStatus, updateBagItems } =
+  const { bags, apartments, stock, missions, updateBagStatus, updateBagItems } =
   useAppState();
   const [selectedBag, setSelectedBag] = useState<Bag | null>(null);
   const [editingItems, setEditingItems] = useState<BagItem[]>([]);
@@ -33,9 +36,6 @@ export function Bags() {
   };
   const getStockItemName = (stockId: string) => {
     return stock.find((s) => s.id === stockId)?.name || 'Inconnu';
-  };
-  const getStockItem = (stockId: string) => {
-    return stock.find((s) => s.id === stockId);
   };
   const handleEditBag = (bag: Bag) => {
     setSelectedBag(bag);
@@ -87,6 +87,28 @@ export function Bags() {
       })
     );
   };
+
+  // Group bags by their associated mission date
+  const groupedBags = (() => {
+    const map = new Map<string, Array<{bag: Bag, mission: Mission | undefined}>>();
+    // Find missions for bags
+    for (const bag of bags) {
+      const mission = missions.find(m => m.bagId === bag.id);
+      // If no mission, put in 'Non planifié' or today
+      const dateKey = mission ? mission.date.slice(0, 10) : 'Non planifié';
+      if (!map.has(dateKey)) map.set(dateKey, []);
+      map.get(dateKey)!.push({ bag, mission });
+    }
+
+    return Array.from(map.entries())
+      .sort(([a], [b]) => {
+        if (a === 'Non planifié') return 1;
+        if (b === 'Non planifié') return -1;
+        return a.localeCompare(b);
+      })
+      .map(([date, items]) => ({ date, items }));
+  })();
+
   const statusOptions: Bag['status'][] = [
   'à_préparer',
   'à_préparer_incomplet',
@@ -122,97 +144,114 @@ export function Bags() {
         })}
       </div>
 
-      {/* Bags Grid */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {bags.map((bag) => {
-          const apartment = apartments.find((a) => a.id === bag.apartmentId);
-          if (!apartment) return null;
+      {/* Bags Grid Grouped */}
+      <div className="space-y-8">
+        {groupedBags.map(({ date, items }) => {
+          const isUnplanned = date === 'Non planifié';
+          const titleDate = isUnplanned ? date : date;
+          
           return (
-            <Card key={bag.id} className="relative">
-              <CardHeader className="pb-3">
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-2">
-                    <ShoppingBag className="h-5 w-5 text-primary" />
-                    <CardTitle className="text-lg">{apartment.name}</CardTitle>
-                  </div>
-                  <BagStatus status={bag.status} />
-                </div>
-                <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
-                  <Building2 className="h-3 w-3" />
-                  <span className="truncate">{apartment.address}</span>
-                </div>
-              </CardHeader>
+            <MissionDateGroup key={date} date={titleDate} count={items.length}>
+              {items.map(({ bag, mission }) => {
+                const apartment = apartments.find((a) => a.id === bag.apartmentId);
+                if (!apartment) return null;
+                
+                return (
+                  <Card key={bag.id} className="relative mt-4">
+                    <CardHeader className="pb-3">
+                        <div className="flex justify-between items-start">
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2 text-primary font-medium">
+                              <ShoppingBag className="h-5 w-5" />
+                              <CardTitle className="text-lg">{apartment.name}</CardTitle>
+                            </div>
+                            {mission && (
+                              <p className="text-sm font-semibold text-muted-foreground flex items-center gap-1">
+                                <span className="text-xs uppercase tracking-wider">Mission du</span> {format(parseISO(mission.date), 'dd MMM yyyy', { locale: fr })}
+                              </p>
+                            )}
+                          </div>
+                          <BagStatus status={bag.status} />
+                        </div>
+                        <div className="flex items-center gap-1 text-sm text-muted-foreground mt-2">
+                          <Building2 className="h-3 w-3" />
+                          <span className="truncate">{apartment.address}</span>
+                        </div>
+                      </CardHeader>
 
-              <CardContent className="space-y-4">
-                {/* Bag Contents Preview */}
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-muted-foreground">
-                    Contenu ({bag.items.length} articles)
-                  </p>
-                  <div className="flex flex-wrap gap-1">
-                    {bag.items.slice(0, 4).map((item, idx) =>
-                    <Badge key={idx} variant="secondary" className="text-xs">
-                        {getStockItemName(item.stockItemId)} x{item.quantity}
-                      </Badge>
-                    )}
-                    {bag.items.length > 4 &&
-                    <Badge variant="outline" className="text-xs">
-                        +{bag.items.length - 4} autres
-                      </Badge>
-                    }
-                  </div>
-                </div>
+                      <CardContent className="space-y-4">
+                        {/* Bag Contents Preview */}
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-muted-foreground">
+                            Contenu ({bag.items.length} articles)
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {bag.items.slice(0, 4).map((item, idx) =>
+                            <Badge key={idx} variant="secondary" className="text-xs">
+                                {getStockItemName(item.stockItemId)} x{item.quantity}
+                              </Badge>
+                            )}
+                            {bag.items.length > 4 &&
+                            <Badge variant="outline" className="text-xs">
+                                +{bag.items.length - 4} autres
+                              </Badge>
+                            }
+                          </div>
+                        </div>
 
-                {/* Quick Status Change */}
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-muted-foreground">
-                    Changer le statut
-                  </p>
-                  <div className="flex flex-wrap gap-1">
-                    <Button
-                      size="sm"
-                      variant={bag.status === 'prêt' ? 'primary' : 'outline'}
-                      className="text-xs h-7"
-                      onClick={() => handleStatusChange(bag.id, 'prêt')}>
+                        {/* Quick Status Change */}
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-muted-foreground">
+                            Changer le statut
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            <Button
+                              size="sm"
+                              variant={bag.status === 'prêt' ? 'primary' : 'outline'}
+                              className="text-xs h-7"
+                              onClick={() => handleStatusChange(bag.id, 'prêt')}>
 
-                      Prêt
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={bag.status === 'sale' ? 'primary' : 'outline'}
-                      className="text-xs h-7"
-                      onClick={() => handleStatusChange(bag.id, 'sale')}>
+                              Prêt
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={bag.status === 'sale' ? 'primary' : 'outline'}
+                              className="text-xs h-7"
+                              onClick={() => handleStatusChange(bag.id, 'sale')}>
 
-                      Sale
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={
-                      bag.status === 'en_lavage' ? 'primary' : 'outline'
-                      }
-                      className="text-xs h-7"
-                      onClick={() => handleStatusChange(bag.id, 'en_lavage')}>
+                              Sale
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={
+                              bag.status === 'en_lavage' ? 'primary' : 'outline'
+                              }
+                              className="text-xs h-7"
+                              onClick={() => handleStatusChange(bag.id, 'en_lavage')}>
 
-                      Lavage
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
+                              Lavage
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
 
-              <CardFooter className="gap-2">
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={() => handleViewBag(bag)}>
+                      <CardFooter className="gap-2">
+                        <Button
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => handleViewBag(bag)}>
 
-                  Voir détails
-                </Button>
-                <Button variant="outline" onClick={() => handleEditBag(bag)}>
-                  <Edit className="h-4 w-4" />
-                </Button>
-              </CardFooter>
-            </Card>);
-
+                          Préparer / Voir détails
+                        </Button>
+                        <Button variant="outline" onClick={() => handleEditBag(bag)}>
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                      </CardFooter>
+                  </Card>
+                );
+              })}
+            </MissionDateGroup>
+          );
         })}
       </div>
 
@@ -323,51 +362,8 @@ export function Bags() {
                   </Button>
                 </div>
 
-                <div className="border rounded-lg divide-y">
-                  {selectedBag.items.length === 0 ?
-              <div className="p-8 text-center text-muted-foreground">
-                      <Package className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                      <p>Aucun article dans ce sac</p>
-                    </div> :
-
-              selectedBag.items.map((item, idx) => {
-                const stockItem = getStockItem(item.stockItemId);
-                const isLowStock =
-                stockItem && stockItem.quantity < item.quantity;
-                return (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between p-3">
-
-                          <div className="flex items-center gap-3">
-                            <Package className="h-4 w-4 text-muted-foreground" />
-                            <div>
-                              <p className="font-medium">
-                                {getStockItemName(item.stockItemId)}
-                              </p>
-                              {stockItem &&
-                        <p className="text-xs text-muted-foreground">
-                                  Stock disponible: {stockItem.quantity}
-                                </p>
-                        }
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge
-                        variant={isLowStock ? 'destructive' : 'secondary'}>
-
-                              x{item.quantity}
-                            </Badge>
-                            {isLowStock &&
-                      <Badge variant="warning" className="text-xs">
-                                Stock insuffisant
-                              </Badge>
-                      }
-                          </div>
-                        </div>);
-
-              })
-              }
+                <div className="border rounded-lg p-2">
+                  <BagChecklistForm bag={selectedBag} onSuccess={() => setSelectedBag({...selectedBag, status: 'prêt'})} />
                 </div>
 
                 {/* Status Management */}

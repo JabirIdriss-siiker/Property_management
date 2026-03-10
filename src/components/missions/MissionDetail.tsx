@@ -1,11 +1,12 @@
-import React from 'react';
-import { Mission, Apartment, User, Bag, StockItem } from '../../types';
+import { Mission, Apartment, User, Bag } from '../../types';
 import { Button } from '../ui/Button';
 import { Select } from '../ui/Select';
 import { BagStatus } from '../bags/BagStatus';
 import { Badge } from '../ui/Badge';
 import { useAppState } from '../../hooks/useAppState';
 import { useAuth } from '../../contexts/AuthContext';
+import { BagChecklistForm } from '../bags/BagChecklistForm';
+
 interface MissionDetailProps {
   mission: Mission;
   apartment: Apartment;
@@ -16,15 +17,11 @@ interface MissionDetailProps {
 export function MissionDetail({
   mission,
   apartment,
-  agent,
   bag,
-  onClose
 }: MissionDetailProps) {
-  const { updateMissionStatus, assignAgent, users, stock } = useAppState();
+  const { updateMissionStatus, assignAgent, users } = useAppState();
   const { isAdmin } = useAuth();
   const agents = users.filter((u) => u.role === 'agent');
-  const getStockItemName = (id: string) =>
-    stock.find((s) => s.id === id)?.name || 'Inconnu';
   return (
     <div className="space-y-6">
       {/* Header Info */}
@@ -114,18 +111,11 @@ export function MissionDetail({
       {/* Bag Details */}
       <div className="space-y-4 border-t pt-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-medium">Contenu du sac</h3>
+          <h3 className="font-medium">Préparation du sac</h3>
           <BagStatus status={bag.status} />
         </div>
 
-        <div className="bg-muted/30 rounded-md p-4 space-y-2">
-          {bag.items.map((item, idx) =>
-            <div key={idx} className="flex justify-between text-sm">
-              <span>{getStockItemName(item.stockItemId)}</span>
-              <span className="font-medium">x{item.quantity}</span>
-            </div>
-          )}
-        </div>
+        <BagChecklistForm bag={bag} />
       </div>
 
       {/* Codes */}

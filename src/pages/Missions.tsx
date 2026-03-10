@@ -275,15 +275,18 @@ export function Missions() {
 
       {/* Mission detail modal */}
       <Modal isOpen={!!selectedMission} onClose={() => setSelectedMission(null)} title="Détails de la mission">
-        {selectedMission && (
-          <MissionDetail
-            mission={selectedMission}
-            apartment={apartments.find((a) => a.id === selectedMission.apartmentId)!}
-            bag={bags.find((b) => b.id === selectedMission.bagId)!}
-            agent={users.find((u) => u.id === selectedMission.agentId)}
-            onClose={() => setSelectedMission(null)}
-          />
-        )}
+        {selectedMission && (() => {
+          const liveMission = missions.find(m => m.id === selectedMission.id) ?? selectedMission;
+          return (
+            <MissionDetail
+              mission={liveMission}
+              apartment={apartments.find((a) => a.id === liveMission.apartmentId)!}
+              bag={bags.find((b) => b.id === liveMission.bagId)!}
+              agent={users.find((u) => u.id === liveMission.agentId)}
+              onClose={() => setSelectedMission(null)}
+            />
+          );
+        })()}
       </Modal>
 
       {/* Create mission modal */}
